@@ -2488,13 +2488,37 @@ static int read_memory_progbuf(struct target *target, target_addr_t address,
 	return result;
 }
 
+static int read_memory_progbuf_no_blocks(struct target *target, target_addr_t address,
+		uint32_t size, uint32_t count, uint8_t *buffer) {
+
+	uint32_t batch_size = 1; // Use a batch size of 1 when programming without block reads
+	int result = ERROR_FAIL;
+
+	for (uint32_t i = 0; i < count; i = i+batch_size) {
+		result = read_memory_progbuf(target, (address + size*i), size, batch_size, (buffer + size*i));
+		if (result == ERROR_FAIL) {
+			return result;
+		}
+	}
+	return ERROR_OK;
+}
+
 static int read_memory(struct target *target, target_addr_t address,
 		uint32_t size, uint32_t count, uint8_t *buffer)
 {
 	RISCV013_INFO(info);
-	if (info->progbufsize >= 2 && !riscv_prefer_sba)
-		return read_memory_progbuf(target, address, size, count, buffer);
 
+	bool using_jtag_vpi = riscv_progbuf_no_blocks; // Indicates that OpenOCD is using JTAG VPI
+
+	// Modified program buffer read sequence. Perform block writes only of size one when
+	// using jtag_vpi.
+	if (info->progbufsize >= 2 && !riscv_prefer_sba) {
+		if(using_jtag_vpi) {
+			return read_memory_progbuf_no_blocks(target, address, size, count, buffer);
+		} else {
+			return read_memory_progbuf(target, address, size, count, buffer);
+		}
+	}
 	if ((get_field(info->sbcs, DMI_SBCS_SBACCESS8) && size == 1) ||
 			(get_field(info->sbcs, DMI_SBCS_SBACCESS16) && size == 2) ||
 			(get_field(info->sbcs, DMI_SBCS_SBACCESS32) && size == 4) ||
@@ -2506,8 +2530,13 @@ static int read_memory(struct target *target, target_addr_t address,
 			return read_memory_bus_v1(target, address, size, count, buffer);
 	}
 
-	if (info->progbufsize >= 2)
-		return read_memory_progbuf(target, address, size, count, buffer);
+	if (info->progbufsize >= 2) {
+		if(using_jtag_vpi) {
+			return read_memory_progbuf_no_blocks(target, address, size, count, buffer);
+		} else {
+			return read_memory_progbuf(target, address, size, count, buffer);
+		}
+	}
 
 	LOG_ERROR("Don't know how to read memory on this target.");
 	return ERROR_FAIL;
@@ -2900,7 +2929,7 @@ static int write_memory(struct target *target, target_addr_t address,
 
 	bool using_jtag_vpi = riscv_progbuf_no_blocks; // Indicates that OpenOCD is using JTAG VPI
 
-	// Modified program buffer write sequence. Preform block writes of size one only when
+	// Modified program buffer write sequence. Perform block writes of size one only when
 	// using jtag_vpi.
 	if (info->progbufsize >= 2 && !riscv_prefer_sba) {
 		if(using_jtag_vpi) {
@@ -2908,7 +2937,7 @@ static int write_memory(struct target *target, target_addr_t address,
 		} else {
 			return write_memory_progbuf(target, address, size, count, buffer);
 		}
-	} 
+	}
 
 
 	if ((get_field(info->sbcs, DMI_SBCS_SBACCESS8) && size == 1) ||
@@ -2930,7 +2959,7 @@ static int write_memory(struct target *target, target_addr_t address,
 		} else {
 			return write_memory_progbuf(target, address, size, count, buffer);
 		}
-	} 
+	}
 
 
 	LOG_ERROR("Don't know how to write memory on this target.");
